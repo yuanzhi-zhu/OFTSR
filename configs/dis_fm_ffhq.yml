@@ -1,0 +1,122 @@
+seed: 42
+work_dir: ./work_dir_ffhq_dis6
+expr: 'FFHQ_DIS'
+wandb_project: 
+wandb_entity: yuanzhi_zhu
+wandb_key: ''
+use_tensorboard: True
+
+# Dataset parameters
+dataset:
+  img_size: 256
+  batch_size: 8
+  train_path: [../ffhq256_train_images]
+  val_path: ../ffhq_val_100
+  num_workers: 8
+  resize_size: 0
+  random_crop: True
+  center_crop: False
+  val_img_size: 256
+  random_crop_val: False
+  center_crop_val: True
+  use_aug: True
+  num_classes: 
+
+# Image restoration parameters
+ir:
+  degradation: sr_interp   # [sr_interp, sr_avp]
+  mode: bicubic
+  scale_factor: 4
+  sigma_y: 0.0              # noise in the measurement
+  calc_LPIPS: False
+  calc_FID: False
+  sigma_pertubation: 1.    # pertubation on the x0 distribution
+
+# Flow matching models parameters
+fm_model:
+  flow_t_schedule: uniform
+  use_cond: False # concate with LR input
+  T: 1.
+  eps: !!float 0.001
+
+# Unet parameters
+network:
+  zero_init: True
+  model_path: ''
+  model_arch: guided_unet   # [CUSRNet, diffuser, IRSDE, SongUNet, guided_unet]
+  in_channels: 3
+  out_channels: 3
+  num_channels: 128
+  num_res_blocks: 1
+  attention_resolutions: "16"
+  num_heads: 4
+  dropout: 0.1
+  channel_mult: "1, 1, 2, 2, 4, 4"
+  resblock_updown: True
+  use_group_norm: True
+  use_attention: True
+  use_input_skip: False
+  ema_rate: 0.9999
+  skip_mode: concat
+  # SwinIR
+  depth_per_layer: 4
+  patch_size: 1
+  window_size: 8
+
+# Training parameters
+train:
+  resume_from: ''
+  pre_train_model: './work_dir_ffhq/sr_bicubic-sf4-guided_unet-t_uniform-sigma0.1-bs32-loss_l1-lr0.0001-amp_fp32-FFHQ/20241024-1000/checkpoints/sr_bicubic-sf4-guided_unet-sigma0.1-bs32-loss_l1-lr0.0001-FFHQ-checkpoint_10.pth'
+  accumulation_steps: 1
+  progress: False
+  max_steps: 400000
+  loss_type: l1
+  weight_schedule: uniform
+  record_iters: 100
+  validate_iters: 500
+  snapshot_freq_for_preemption: 5000
+  snapshot_freq: 20000
+  use_amp: True
+  amp_dtype: fp32
+  compile: False  # compile model will lead to strange artifacts in the restored images
+  reduce_mean: True
+
+# optimizer parameters
+optim:
+  optimizer: Adam
+  beta1: 0.9
+  beta2: 0.999
+  eps: !!float 1e-8
+  weight_decay: !!float 0.0
+  grad_clip: 1.
+  lr: !!float 1e-4
+  warmup: 500
+  lr_decay: 0
+
+# Sampling parameters
+sample:
+  pre_train_model: ''
+  use_ode_sampler: rk45
+  sample_N: 8
+  ode_tol: !!float 1e-3
+  num_sample: 16
+  eta: 0.0
+  num_psnr_sample: 100
+  psnr_batch_size: 16
+  noise_var: 0.0
+  rho: 1.
+  rk2_r: 1.
+  file_ext: png
+  use_one_step: True
+  one_step_t: 0.99
+
+boot:
+  t_min: !!float 0.01
+  t_max: 0.99
+  t_step: 0.05
+  teacher_solver: rk2
+  rk2_r: 0.5
+  distil_loss: v_boot
+  lambda_distil: 1.
+  lambda_boundary: 0.1
+  lambda_align: 0.01

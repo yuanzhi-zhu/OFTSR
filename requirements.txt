@@ -1,0 +1,16 @@
+numpy==1.23.4
+protobuf==3.19.6
+wandb==0.16.6
+scipy==1.10.0
+matplotlib==3.7.0
+tqdm==4.64.1
+ml_collections==0.1.1
+urllib3==1.26.14
+timm==0.4.12
+transformers==4.34.0
+lpips==0.1.4
+opencv-python
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.2.0+cu121
+torchaudio==2.2.0+cu121
+torchvision==0.17.0+cu121
