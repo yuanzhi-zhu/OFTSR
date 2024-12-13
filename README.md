@@ -1,8 +1,8 @@
 # OFTSR
 
 This is the official implementation of the paper:
-## [OFTSR: One-Step Flow for Image Super-Resolution with Tunable Fidelity-Realism Trade-offs](https://arxiv.org/abs/) 
-by [Yuanzhi Zhu](https://yuanzhi-zhu.github.io/about/), Ruiqing Wang, [Shilin Lu](https://scholar.google.com/citations?user=gAG9WLYAAAAJ), [Hanshu Yan](https://hanshuyan.github.io/), [Junnan Li](https://scholar.google.com/citations?user=MuUhwi0AAAAJ), [Kai Zhang](https://cszn.github.io/)
+## [OFTSR: One-Step Flow for Image Super-Resolution with Tunable Fidelity-Realism Trade-offs](https://arxiv.org/abs/2412.09465).
+by [Yuanzhi Zhu](https://yuanzhi-zhu.github.io/about/), [Ruiqing Wang](https://github.com/wrqcodedoge), [Shilin Lu](https://scholar.google.com/citations?user=gAG9WLYAAAAJ), [Hanshu Yan](https://hanshuyan.github.io/), [Junnan Li](https://scholar.google.com/citations?user=MuUhwi0AAAAJ), [Kai Zhang](https://cszn.github.io/)
 
 ## usage
 ########################## FFHQ Generation ##########################
