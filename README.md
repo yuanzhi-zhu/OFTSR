@@ -1,7 +1,7 @@
 # OFTSR
 
 This is the official implementation of the paper:
-## [OFTSR: One-Step Flow for Image Super-Resolution with Tunable Fidelity-Realism Trade-offs](https://arxiv.org/abs/2412.09465).
+## [OFTSR: One-Step Flow for Image Super-Resolution with Tunable Fidelity-Realism Trade-offs](https://arxiv.org/abs/2412.09465)
 by [Yuanzhi Zhu](https://yuanzhi-zhu.github.io/about/), [Ruiqing Wang](https://github.com/wrqcodedoge), [Shilin Lu](https://scholar.google.com/citations?user=gAG9WLYAAAAJ), [Hanshu Yan](https://hanshuyan.github.io/), [Junnan Li](https://scholar.google.com/citations?user=MuUhwi0AAAAJ), [Kai Zhang](https://cszn.github.io/)
 
 ## usage
@@ -132,3 +132,14 @@ python sample_fm.py --opt configs/dis_fm_imagenet.yml \
 checkpoints can be found here on HuggingFace: https://huggingface.co/Yuanzhi/OFTSR
 To sample from these checkpoints, please follow the instructions in the README.md of the HuggingFace model.
 
+## Citation
+If you find this repo helpful, please cite:
+
+```bibtex
+@article{zhu2024oftsr,
+  title={OFTSR: One-Step Flow for Image Super-Resolution with Tunable Fidelity-Realism Trade-offs},
+  author={Zhu, Yuanzhi and Wang, Ruiqing and Lu, Shilin and Li, Junnan and Yan, Hanshu and Zhang, Kai},
+  journal={arXiv preprint arXiv:2412.09465},
+  year={2024}
+}
+```
