@@ -219,3 +219,4 @@ data_stat.npz
 fid.txt
 tensorboard/
 results_ir-sde_DIV2k/
+ckpts/
