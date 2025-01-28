@@ -161,6 +161,12 @@ python sample_fm.py --opt configs/dis_fm_imagenet.yml \
         sample.one_step_t=0.99
 ```
 
+## Evaluation
+```bash
+python evaluate.py --fdir1 hr_folder --fdir2 sr_folder
+python fid.py --fdir1 hr_folder --fdir2 sr_folder
+```
+
 ## Checkpoints
 checkpoints can be found here on HuggingFace: https://huggingface.co/Yuanzhi/OFTSR
 To sample from these checkpoints, please follow the instructions in the README.md of the HuggingFace model.
