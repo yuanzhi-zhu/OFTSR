@@ -10,6 +10,7 @@ timm==0.4.12
 transformers==4.34.0
 lpips==0.1.4
 opencv-python
+albumentations
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch==2.2.0+cu121
 torchaudio==2.2.0+cu121

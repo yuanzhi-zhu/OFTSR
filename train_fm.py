@@ -40,6 +40,28 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from omegaconf import OmegaConf
+from basicsr.data.realesrgan_dataset import RealESRGANDataset
+
+def prepare_paired_batch(flow, batch, config, augment_pipe=None, mode='train'):
+    ## augment pipeline: edm
+    ## --> https://github.com/NVlabs/edm/blob/main/training/augment.py
+    batch, augment_labels = augment_pipe(batch) if augment_pipe is not None else (batch, None)
+    if config.ir.degradation == 'realsr':
+        assert augment_pipe is None, "augment_pipe is unncessary for realsr"
+        batch = flow.real_degra_pipeline.prepare_data(batch, phase='train')
+        batch['lq_true'] = batch['lq'].clone()
+        batch['lq'] = torch.nn.functional.interpolate(batch['lq'], scale_factor = config.ir.scale_factor, mode='bicubic', align_corners=False)
+        return batch
+    elif config.ir.degradation == 'sr_interp' or config.ir.degradation == 'sr_avp':
+        batch_dict = {}
+        y = flow.operator.forward(batch, mask=None)
+        yn = flow.noiser(y)
+        batch_dict['lq_true'] = yn.clone()
+        if config.ir.scale_factor > 1:
+            yn_ = flow.operator.transpose(yn, mask=None)
+        batch_dict['gt'] = batch
+        batch_dict['lq'] = yn_.detach().clone()
+        return batch_dict
 
 def cleanup():
     """
@@ -143,7 +165,12 @@ def main():
     logger.info(f"Starting rank={rank}, seed={config.seed}, world_size={dist.get_world_size()}.")
 
     ##################        create dataloaders        #####################
-    img_dataset = ImageDataset(dataset_config, phase='train')
+    if config.ir.degradation == 'realsr':
+        img_dataset = RealESRGANDataset(config.data.train.params, mode='training')
+    elif config.ir.degradation in ['sr_interp', 'sr_avp']:
+        img_dataset = ImageDataset(dataset_config, phase='train')
+    else:
+        raise NotImplementedError(f"other degradation type is not implemented")
     logger.info(f'length of dataset: {len(img_dataset)}')
     sampler = DistributedSampler(
                     img_dataset,
@@ -162,10 +189,14 @@ def main():
                     drop_last=True
     )
     logger.info(f'length of dataloader: {len(data_loader)}')
+    assert len(data_loader) > 0, "dataloader is empty"
     if dist.get_rank() == 0:
-        val_img_dataset = ImageDataset(dataset_config, phase='val')
+        if config.ir.degradation == 'realsr':
+            val_img_dataset = RealESRGANDataset(config.data.val.params, mode='testing')
+        else:
+            val_img_dataset = ImageDataset(dataset_config, phase='val')
         val_data_loader = torch.utils.data.DataLoader(val_img_dataset,
-                                                        batch_size=sample_config.num_psnr_sample,
+                                                        batch_size=min(sample_config.num_psnr_sample, val_img_dataset.__len__()),
                                                         shuffle=False,
                                                         num_workers=dataset_config.num_workers,
                                                         pin_memory=True)
@@ -243,16 +274,17 @@ def main():
     if dist.get_rank() == 0:
         ## prepare num_psnr_sample for validation
         val_batch, val_label_dic = next(iter(val_data_loader))
+        val_batch = prepare_paired_batch(flow, val_batch, config)
+        if config.ir.degradation == 'realsr':
+            del flow.real_degra_pipeline.queue_size, flow.real_degra_pipeline.queue_lr
+            flow.real_degra_pipeline.queue_ptr = 0
         val_label = val_label_dic.to(device) if dataset_config.num_classes is not None else None
-        assert val_batch.shape[0] >= sample_config.psnr_batch_size
-        y = flow.operator_val.forward(val_batch.to(device))
-        yn = flow.noiser(y)
-        y_LR = yn.clone()
-        if config_ir.scale_factor > 1:
-            yn = flow.operator_val.transpose(yn)
+        # assert val_batch['gt'].shape[0] >= sample_config.psnr_batch_size
+        yn = val_batch['lq']
+        y_LR = val_batch['lq_true']
         x_0 = flow.noiser_pertub(yn)     # noise pertubation
         ## save HR and LR of the first num_sample
-        save_val_batch = val_batch[:sample_config.num_sample].clone().mul_(0.5).add_(0.5)
+        save_val_batch = val_batch['gt'][:sample_config.num_sample].clone().mul_(0.5).add_(0.5)
         save_image_batch(save_val_batch, dataset_config.img_size, img_path, log_name=f'gt.png')
         save_x_0 = x_0[:sample_config.num_sample].clone().mul_(0.5).add_(0.5)
         save_image_batch(save_x_0, dataset_config.img_size, img_path, log_name=f'LR_input_perturb.png')
@@ -279,7 +311,8 @@ def main():
         except:
             data_iterator = iter(data_loader)
             batch, label_dic = next(data_iterator)
-        save_image_batch(batch[:sample_config.num_sample].clone().mul_(0.5).add_(0.5), dataset_config.img_size, img_path, log_name=f'train_gt_batch.png')
+        batch = prepare_paired_batch(flow, batch, config)
+        save_image_batch(batch['gt'][:sample_config.num_sample].clone().mul_(0.5).add_(0.5), dataset_config.img_size, img_path, log_name=f'train_gt_batch.png')
     #################################################################################
     #                                 training loop                                 #
     #################################################################################
@@ -303,9 +336,10 @@ def main():
             except:
                 data_iterator = iter(data_loader)
                 batch, label_dic = next(data_iterator)
+            batch = prepare_paired_batch(flow, batch, config, augment_pipe=augment_pipe)
             label = label_dic.to(device) if network_config.num_classes is not None else None
             # perform a train step
-            loss = flow.train_step(batch.to(device), augment_pipe, label=label)
+            loss = flow.train_step(batch, label=label)
             loss /= train_config.accumulation_steps
             flow.amp_scaler.scale(loss).backward()
             loss_dict["loss_fm"] += loss.mean().item()
@@ -327,13 +361,15 @@ def main():
             # record val loss
             with torch.no_grad():
                 mini_bs = sample_config.psnr_batch_size
-                total_val_mini_iter = (val_batch.shape[0]-1)//mini_bs + 1
+                total_val_mini_iter = (val_batch['lq'].shape[0]-1)//mini_bs + 1
                 loss_dict["val_loss"] = 0.0
                 for val_mini_iter in range(total_val_mini_iter):
-                    val_mini_batch = val_batch[val_mini_iter * mini_bs: (val_mini_iter+1) * mini_bs]
+                    val_mini_batch_gt = val_batch['gt'][val_mini_iter * mini_bs: (val_mini_iter+1) * mini_bs]
+                    val_mini_batch_lq = val_batch['lq'][val_mini_iter * mini_bs: (val_mini_iter+1) * mini_bs]
+                    val_mini_batch = {'gt': val_mini_batch_gt, 'lq': val_mini_batch_lq}
                     val_mini_label = val_label[val_mini_iter * mini_bs: (val_mini_iter+1) * mini_bs] if dataset_config.num_classes is not None else None
-                    loss_dict["val_loss"] +=  flow.train_step(val_mini_batch.to(device), augment_pipe, label=val_mini_label, mode='val') * val_mini_batch.shape[0]
-                loss_dict["val_loss"] = loss_dict["val_loss"] / val_batch.shape[0]
+                    loss_dict["val_loss"] +=  flow.train_step(val_mini_batch, augment_pipe, label=val_mini_label, mode='val') * val_batch['lq'].shape[0]
+                loss_dict["val_loss"] = loss_dict["val_loss"] / val_batch['lq'].shape[0]
             logger.info(f'step: --> {global_step:08d}; current lr: {current_lr:0.6f}; average loss: {np.average(train_loss_values):0.10f}; batch loss: {loss_dict["loss_fm"]:0.10f}; val batch loss: {loss_dict["val_loss"].item():0.10f}')
         
         # log the losses and misc

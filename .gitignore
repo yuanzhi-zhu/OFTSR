@@ -220,3 +220,7 @@ fid.txt
 tensorboard/
 results_ir-sde_DIV2k/
 ckpts/
+DIV2K_train_HR/
+DIV2K_valid_HR/
+DIV2K_train_HR.zip
+DIV2K_valid_HR.zip

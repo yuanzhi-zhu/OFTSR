@@ -6,6 +6,7 @@ import numpy as np
 from torch.utils.data import Dataset
 import os
 join = os.path.join
+EXTs = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
 
 # --------------------------------------------
 # get uint8 image of size HxWxn_channles (RGB)
@@ -41,6 +42,7 @@ class ImageDataset(Dataset):
             if not os.path.exists(image_path):
                 continue
             self.image_names.extend([os.path.join(image_path, image_name) for image_name in sorted(os.listdir(image_path))])
+        self.image_names = [image_name for image_name in self.image_names if os.path.splitext(image_name)[-1].lower() in EXTs]
 
     def __len__(self):
         return len(self.image_names)

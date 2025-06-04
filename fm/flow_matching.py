@@ -11,6 +11,7 @@ from fm.measurements import get_noise, get_operator
 from functools import partial
 from fm.losses import get_flow_loss_fn
 from fm.utils import calc_psnr
+from fm.realsrDataPipeline import RealSRDataPipeline
 import lpips
 
 PRECISION_MAP = {
@@ -24,6 +25,7 @@ class FM():
         self.cfg = cfg
         self.flow_config = cfg.fm_model
         self.config_ir = cfg.ir
+        self.config_degradation = cfg.ir.degradation
         self.dataset_config = cfg.dataset
         self.network_config = cfg.network
         self.model = model
@@ -47,11 +49,14 @@ class FM():
         logging.info(f'sigma_pertubation: {self.config_ir.sigma_pertubation}')
         logging.info(f'ODE Tolerence: {self.ode_tol}')
         logging.info(f'use automatic mixed precision: {self.cfg.train.use_amp}; dtype: {self.amp_dtype}')
-        self.amp_scaler = torch.amp.GradScaler(enabled=self.cfg.train.use_amp)
+        self.amp_scaler = torch.cuda.amp.GradScaler(enabled=self.cfg.train.use_amp)
         ## get degradation operator
-        self.operator = get_operator(name=self.config_ir.degradation, scale_factor=self.config_ir.scale_factor, mode=self.config_ir.mode, device=self.device)
-        self.operator_val = get_operator(name=self.config_ir.degradation, scale_factor=self.config_ir.scale_factor, mode=self.config_ir.mode, device=self.device)
-        self.noiser = get_noise(name='gaussian', sigma=self.config_ir.sigma_y)
+        if self.config_ir.degradation == 'realsr':
+            #print(self.config_ir.degradation)
+            self.real_degra_pipeline = RealSRDataPipeline(cfg=self.cfg, device=self.device)
+        else:
+            self.operator = get_operator(name=self.config_ir.degradation, scale_factor=self.config_ir.scale_factor, mode=self.config_ir.mode, device=self.device)
+            self.noiser = get_noise(name='gaussian', sigma=self.config_ir.sigma_y)
         self.noiser_pertub = get_noise(name='gaussian_VP', sigma=self.config_ir.sigma_pertubation)
         ### lpips model for validation
         if 'lpips' in self.cfg.train.loss_type:
@@ -91,18 +96,15 @@ class FM():
         model_output = model(x, t*999, label, augment_labels)
         model_output = model_output[0] if isinstance(model_output, tuple) else model_output
         return model_output[:, :3]
-    
+
     def get_train_tuple_IR(self,
-                            x: Tensor,
+                            batch,
                             mask: Tensor = None,
                             **kwargs: Any,):
         """get sigma_t, x_t, sigma_{t+1}, x_{t+1}"""
-        operator = self.operator if kwargs['mode'] == 'train' else self.operator_val
-        ## Forward measurement model (Ax + n)
-        y = operator.forward(x, mask=mask)
-        yn_ = self.noiser(y)
-        if self.config_ir.scale_factor > 1:
-            yn_ = operator.transpose(yn_, mask=mask)
+        ## Forward measurement model (Ax + n) or realesrgan data pipeline
+        x = batch['gt'].to(self.device)
+        yn_ = batch['lq'].to(self.device)
         self.cond = yn_.detach().clone()
         yn = self.noiser_pertub(yn_)     # noise pertubation
         self.x1 = x
@@ -129,7 +131,7 @@ class FM():
         else:
             assert False, f'flow_t_schedule {self.flow_t_schedule} Not implemented'
         # linear interpolation between clean image and noise
-        self.xt = torch.einsum('b,bijk->bijk', self.t, data) + torch.einsum('b,bijk->bijk', (1 - self.t), noise)
+        self.xt = torch.einsum('b,bijk->bijk', self.t, data) + torch.einsum('b,bijk->bijk', (1 - self.t), noise)  # x_t = t * x1 + (1-t) * x0
 
     def pred_tuple(self, **kwargs: Any,) -> Tuple[Tensor, Tensor]:
         # calculate next_x with model
@@ -143,15 +145,12 @@ class FM():
         target = self.x1 - self.x0
         return pred, target
     
-    def train_step(self, batch, augment_pipe=None, mode='train', **kwargs: Any,):
+    def train_step(self, batch, mode='train', **kwargs: Any,):
         """Performs a training step"""
         ### get loss
         '''
         batch: Clean data.
         '''
-        ## augment pipeline: edm
-        ## --> https://github.com/NVlabs/edm/blob/main/training/augment.py
-        batch, augment_labels = augment_pipe(batch) if augment_pipe is not None else (batch, None)
         ## get data pair (self.data, self.noise)
         self.get_train_tuple_IR(batch, mode=mode)
         ## get interpolation t, x_t
@@ -233,13 +232,13 @@ class FM():
     def image_restoration_t_(self, x_0, yn, t):
         samples = []
         for i in range(int(np.ceil(x_0.shape[0] / self.psnr_batch_size))):
-            batch_x0 = x_0[i*self.psnr_batch_size:(i+1)*self.psnr_batch_size]
+            batch_x0 = x_0[i*self.psnr_batch_size:(i+1)*self.psnr_batch_size] # batch_size, 3, H, W
             vec_t = torch.ones(batch_x0.shape[0],).to(self.device) * t
             self.cond = yn.detach()[i*self.psnr_batch_size:(i+1)*self.psnr_batch_size]
             # sample, n = sample_fn(self.model, z=batch_x0)
             with torch.no_grad():
                 v_pred = self.model_forward_wrapper(self.model, batch_x0, vec_t)
-                sample = batch_x0 + (self.T - self.eps) * v_pred
+                sample = batch_x0 + (self.T - self.eps) * v_pred  # x_0 + (T-t) * v_pred
             samples.append(sample.cpu())
         samples = torch.cat(samples, dim=0)
         return samples
@@ -256,26 +255,24 @@ class FM():
     @torch.no_grad()
     def image_restoration(self, val_batch, sample_fn=None, t=0.001):
         # restore the images and calculate the PSNR and LPIPS
-        y = self.operator_val.forward(val_batch.to(self.device))
-        yn = self.noiser(y)
-        y_LR = yn.clone()
-        if self.config_ir.scale_factor > 1:
-            yn = self.operator_val.transpose(yn)
+        data = val_batch
+        yn = data['lq'].to(self.device)
+        y_LR = data['lq_true'].to(self.device)
         x_0 = self.noiser_pertub(yn)     # noise pertubation
         LR = (y_LR, yn, x_0)
         # samples, nfe = self.image_restoration_wrapper(x_0, yn, sample_fn, t)
         samples, nfe = self.test_split_fn(x_0, yn, sample_fn=sample_fn, t=t)
-        psnr = calc_psnr(val_batch.cpu(), samples.cpu())
+        psnr = calc_psnr(val_batch['gt'].cpu(), samples.cpu())
         if self.config_ir.calc_LPIPS:
             with torch.no_grad():
                 lpips_scores = 0
-                for i in range(int(np.ceil(val_batch.shape[0] / self.psnr_batch_size))):
+                for i in range(int(np.ceil(val_batch['gt'].shape[0] / self.psnr_batch_size))):
                     batch_samples = samples[i*self.psnr_batch_size:(i+1)*self.psnr_batch_size].to(self.device)
-                    batch_val_batch = val_batch[i*self.psnr_batch_size:(i+1)*self.psnr_batch_size].to(self.device)
+                    batch_val_batch = val_batch['gt'][i*self.psnr_batch_size:(i+1)*self.psnr_batch_size].to(self.device)
                     lpips_score = self.loss_fn_vgg(batch_samples, batch_val_batch)
                     lpips_score = lpips_score.cpu().detach().numpy().mean()  # [-1,+1]
                     lpips_scores += (lpips_score * batch_samples.shape[0])
-                lpips_score = lpips_scores / val_batch.shape[0]
+                lpips_score = lpips_scores / val_batch['gt'].shape[0]
         else:
             lpips_score = 0
         return psnr, lpips_score, samples, LR, np.mean(nfe)
