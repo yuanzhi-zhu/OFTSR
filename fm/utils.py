@@ -89,10 +89,11 @@ def parse_args_and_config():
         config = yaml.safe_load(file)
     # Convert the dictionary to a EasyDict object
     config = EasyDict(config)
-    config.degradation.sf = config.ir.scale_factor
-    config.data.train.params.dir_paths = config.dataset.train_path
-    config.data.val.params = config.data.train.params
-    config.data.val.params.dir_paths = config.dataset.val_path
+    if config.ir.degradation == 'realsr':
+        config.degradation.sf = config.ir.scale_factor
+        config.data.train.params.dir_paths = config.dataset.train_path
+        config.data.val.params = config.data.train.params
+        config.data.val.params.dir_paths = config.dataset.val_path
     # Process overrides
     if args.overrides:
         updates = {}
